@@ -30,7 +30,7 @@ struct config_t
     //! default transmitter power is 13dBm, using PA_BOOST.
     // If you are using RFM95/96/97/98 modules which uses the PA_BOOST transmitter pin, then
     // you can set transmitter powers from 5 to 23 dBm:
-    uint8_t tx_power = 13;
+    uint8_t tx_power = 23;
 
     uint8_t address = 0;
 };
@@ -46,18 +46,6 @@ enum NodeStructType
     // NodeCommandACKType is used type field by NodeCommandACK structs
     NodeCommandACKType = 1 << 2
 
-};
-
-struct node_info_t
-{
-    uint8_t id[32];
-    uint8_t address = 0;
-    uint8_t server_address = 0;
-    int32_t rssi = 0;
-    uint32_t time_stamp = 0;
-    float battery = 0.f;
-    uint32_t mode = 0;
-    float location[2];
 };
 
 struct driver_struct_t
