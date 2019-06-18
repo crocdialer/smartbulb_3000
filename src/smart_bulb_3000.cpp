@@ -36,7 +36,7 @@ const int g_update_interval = 1000 / UPDATE_RATE;
 constexpr uint32_t g_num_timers = 3;
 enum TimerEnum
 {
-    TIMER_RUNMODE = 0,
+    TIMER_LED_OFF = 0,
     TIMER_BRIGHTNESS_MEASURE = 1,
     TIMER_LORA_SEND = 2
 };
@@ -66,6 +66,9 @@ ModeHelper *g_mode_sinus = nullptr, *g_mode_current = nullptr;
 Mode_ONE_COLOR *g_mode_colour = nullptr;
 CompositeMode *g_mode_composite = nullptr;
 
+// timeout before leds turn off
+float g_led_timeout = 30.f;
+
 // brightness measuring
 constexpr uint8_t g_photo_pin = A5;
 constexpr uint16_t g_photo_thresh = 60;
@@ -75,11 +78,12 @@ uint16_t g_photo_val = 0;
 Adafruit_LIS3DH g_accel;
 constexpr lis3dh_range_t g_sensor_range = LIS3DH_RANGE_4_G;
 sensors_event_t g_sensor_event;
-const uint16_t g_sense_interval = 5;
+const uint16_t g_sense_interval = 2;
 float g_last_accel_val = 0;
+float g_accel_thresh = 1.f;
 
 // median filtering for accelerometer
-const uint16_t g_num_samples = 5;
+const uint16_t g_num_samples = 3;
 RunningMedian g_running_median = RunningMedian(g_num_samples);
 
 // lora assets
@@ -158,6 +162,19 @@ void blink()
     delay(666);
 }
 
+void enable_leds(bool use_leds)
+{
+    for(uint8_t i = 0; i < g_num_paths; ++i)
+    {
+        for(uint8_t j = 0; j < g_path[i]->num_segments(); ++j)
+        {
+            Segment *s = g_path[i]->segment(j);
+            s->set_active(use_leds);
+        }
+    }
+    digitalWrite(13, use_leds);
+}
+
 void setup()
 {
     // while(!Serial){ delay(10); }
@@ -165,9 +182,10 @@ void setup()
 
     srand(analogRead(A0));
 
-    // drives our status LED
+    // button
     pinMode(13, OUTPUT);
     digitalWrite(13, 0);
+    pinMode(12, INPUT_PULLUP);
 
     // enable photo sense pin
     pinMode(g_photo_pin, INPUT);
@@ -191,23 +209,25 @@ void setup()
     g_mode_composite->add_mode(g_mode_sinus);
 
     // timer callback to reset the runmode after streaming
-    g_timer[TIMER_RUNMODE].set_callback([](){ g_run_mode = MODE_RUNNING; });
+    g_timer[TIMER_LED_OFF].set_callback([](){ enable_leds(false); });
+    g_timer[TIMER_LED_OFF].expires_from_now(g_led_timeout);
+
+    // start with leds turned on
+    enable_leds(true);
 
     // brightness measuring
-    g_timer[TIMER_BRIGHTNESS_MEASURE].set_callback([]()
-    {
-        g_photo_val = analogRead(g_photo_pin);
-        bool use_leds = g_photo_val < g_photo_thresh;
-
-        for(uint8_t i = 0; i < g_num_paths; ++i)
-        {
-            for(uint8_t j = 0; j < g_path[i]->num_segments(); ++j)
-            {
-                Segment *s = g_path[i]->segment(j);
-                s->set_active(use_leds);
-            }
-        }
-    });
+    // g_timer[TIMER_BRIGHTNESS_MEASURE].set_callback([]()
+    // {
+    //     g_photo_val = analogRead(g_photo_pin);
+    //     bool use_leds = g_photo_val < g_photo_thresh;
+    //
+    //     if(use_leds)
+    //     {
+    //         enable_leds(true);
+    //         g_timer[TIMER_LED_OFF].expires_from_now(g_led_timeout);
+    //     }
+    //
+    // });
     g_timer[TIMER_BRIGHTNESS_MEASURE].set_periodic();
     g_timer[TIMER_BRIGHTNESS_MEASURE].expires_from_now(.2f);
 
@@ -247,24 +267,30 @@ void loop()
     // receive
     lora_receive();
 
+    // button
+    bool button_pressed = !digitalRead(12);
+
+    if(button_pressed || (g_last_accel_val > g_accel_thresh))
+    {
+        if(g_timer[TIMER_LED_OFF].has_expired()){ enable_leds(true); }
+        g_timer[TIMER_LED_OFF].expires_from_now(g_led_timeout);
+    }
+
     if(g_time_accum >= g_update_interval)
     {
-        // flash red indicator LED
-        if(g_use_indicator){ digitalWrite(13, g_indicator); }
-        g_indicator = !g_indicator;
+        // // flash red indicator LED
+        // if(g_use_indicator){ digitalWrite(13, g_indicator); }
+        // g_indicator = !g_indicator;
 
-        if(!(g_run_mode & MODE_STREAMING))
+        auto color = color_mix(ORANGE, AQUA, clamp(g_last_accel_val / 2.f, 0.f, 1.f));
+        g_mode_colour->set_color(color);
+
+        // Serial.println(g_last_accel_val);
+
+        for(uint8_t i = 0; i < g_num_paths; ++i)
         {
-            auto color = color_mix(ORANGE, AQUA, clamp(g_last_accel_val / 2.f, 0.f, 1.f));
-            g_mode_colour->set_color(color);
-
-            // Serial.println(g_last_accel_val);
-
-            for(uint8_t i = 0; i < g_num_paths; ++i)
-            {
-                g_mode_current->process(g_path[i], g_time_accum);
-                g_path[i]->update(g_time_accum);
-            }
+            g_mode_current->process(g_path[i], g_time_accum);
+            g_path[i]->update(g_time_accum);
         }
 
         // clear acceleration max
