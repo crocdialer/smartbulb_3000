@@ -16,7 +16,7 @@ namespace lora{
 
 struct config_t
 {
-    //! chip select pin
+    //! chip select pin (<6> on adafruit_feather_m4, <7> on adafruit_itsybitsy_m4)
     uint8_t pin_cs = 6;
 
     //! interrupt request pin
@@ -30,7 +30,7 @@ struct config_t
     //! default transmitter power is 13dBm, using PA_BOOST.
     // If you are using RFM95/96/97/98 modules which uses the PA_BOOST transmitter pin, then
     // you can set transmitter powers from 5 to 23 dBm:
-    uint8_t tx_power = 23;
+    uint8_t tx_power = 15;
 
     uint8_t address = 0;
 };
@@ -56,6 +56,8 @@ struct driver_struct_t
 
 static bool setup(const config_t &the_config, driver_struct_t &out_driver)
 {
+    Serial.printf("lora-config: %d Mhz - %d dB\n", int(the_config.frequency), the_config.tx_power);
+
     // delete stuff
     if(out_driver.driver){ delete out_driver.driver; }
     if(out_driver.manager){ delete out_driver.manager; }

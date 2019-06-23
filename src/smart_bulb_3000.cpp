@@ -22,6 +22,10 @@
 #define UPDATE_RATE 30
 #define SERIAL_BUFSIZE 128
 
+// analog-digital-converter (ADC)
+#define ADC_BITS 10
+constexpr uint32_t ADC_MAX = (1 << ADC_BITS) - 1U;
+
 char g_serial_buf[SERIAL_BUFSIZE];
 uint32_t g_buf_index = 0;
 
@@ -32,15 +36,17 @@ uint32_t g_time_accum = 0;
 // update interval in millis
 const int g_update_interval = 1000 / UPDATE_RATE;
 
-// an array of Timer objects
-constexpr uint32_t g_num_timers = 3;
 enum TimerEnum
 {
     TIMER_LED_OFF = 0,
-    TIMER_BRIGHTNESS_MEASURE = 1,
-    TIMER_LORA_SEND = 2
+    TIMER_BRIGHTNESS_MEASURE,
+    TIMER_BATTERY_MEASURE,
+    TIMER_LORA_SEND,
+    NUM_TIMERS
 };
-kinski::Timer g_timer[g_num_timers];
+
+// an array of Timer objects
+kinski::Timer g_timer[NUM_TIMERS];
 
 // helper for flashing PIN 13 (red onboard LED)
 // to indicate update frequency
@@ -52,8 +58,7 @@ bool g_use_indicator = false;
 enum RunMode
 {
     MODE_DEBUG = 1 << 0,
-    MODE_RUNNING = 1 << 1,
-    MODE_STREAMING = 1 << 2
+    MODE_RUNNING = 1 << 1
 };
 uint32_t g_run_mode = MODE_RUNNING;
 
@@ -73,6 +78,10 @@ float g_led_timeout = 30.f;
 constexpr uint8_t g_photo_pin = A5;
 constexpr uint16_t g_photo_thresh = 60;
 uint16_t g_photo_val = 0;
+
+// battery measuring
+constexpr uint8_t g_battery_pin = A6;
+uint16_t g_battery_val = 0;
 
 // acceleration measuring
 Adafruit_LIS3DH g_accel;
@@ -119,12 +128,20 @@ void lora_receive()
     if(m_rfm95.manager->recvfromAck(g_lora_buffer, &len, &from, &to, &msg_id, &flags))
     {
         // null-terminated
-        if(len < sizeof(g_lora_buffer)){ g_lora_buffer[len] = 0; }
+        // if(len < sizeof(g_lora_buffer)){ g_lora_buffer[len] = 0; }
 
         // if(from == m_node_info.server_address && to == g_lora_config.address)
+        if(len >= sizeof(smart_bulb_t))
         {
             auto rssi = m_rfm95.driver->lastRssi();
-            sprintf(g_serial_buf, "received(src: %d -- rssi: %d): %s\n", from, rssi, (char*)g_lora_buffer);
+            sprintf(g_serial_buf, "src: %d -- rssi: %d\n", from, rssi);
+            Serial.write(g_serial_buf);
+
+            smart_bulb_t data = {};
+            memcpy(&data, g_lora_buffer, len);
+
+            sprintf(g_serial_buf, "{\n\tlight:%d\n\tacceleration: %d\n\tbattery: %d\n}\n",
+                    data.light_sensor, data.acceleration, data.battery);
             Serial.write(g_serial_buf);
         }
     }
@@ -136,6 +153,7 @@ bool lora_send_status()
     constexpr size_t num_bytes = sizeof(smart_bulb_t);
 
     smart_bulb_t data = {};
+    data.battery = g_battery_val;
     data.acceleration = static_cast<uint8_t>(map_value<float>(g_last_accel_val, 0.f, 4.f, 0, 255));
     data.light_sensor = static_cast<uint8_t>(map_value<float>(g_photo_val, 0.f, 2 * g_photo_thresh,
                                                               0, 255));
@@ -178,13 +196,12 @@ void enable_leds(bool use_leds)
 void setup()
 {
     // while(!Serial){ delay(10); }
-    Serial.begin(2000000);
+    Serial.begin(115200);
 
     srand(analogRead(A0));
 
     // button
     pinMode(13, OUTPUT);
-    digitalWrite(13, 0);
     pinMode(12, INPUT_PULLUP);
 
     // enable photo sense pin
@@ -216,23 +233,35 @@ void setup()
     enable_leds(true);
 
     // brightness measuring
-    // g_timer[TIMER_BRIGHTNESS_MEASURE].set_callback([]()
-    // {
-    //     g_photo_val = analogRead(g_photo_pin);
-    //     bool use_leds = g_photo_val < g_photo_thresh;
-    //
-    //     if(use_leds)
-    //     {
-    //         enable_leds(true);
-    //         g_timer[TIMER_LED_OFF].expires_from_now(g_led_timeout);
-    //     }
-    //
-    // });
+    g_timer[TIMER_BRIGHTNESS_MEASURE].set_callback([]()
+    {
+        g_photo_val = analogRead(g_photo_pin);
+        bool use_leds = g_photo_val < g_photo_thresh;
+
+        if(use_leds)
+        {
+            enable_leds(true);
+            g_timer[TIMER_LED_OFF].expires_from_now(g_led_timeout);
+        }
+
+    });
     g_timer[TIMER_BRIGHTNESS_MEASURE].set_periodic();
     g_timer[TIMER_BRIGHTNESS_MEASURE].expires_from_now(.2f);
 
+    // battery measuring
+    g_timer[TIMER_BATTERY_MEASURE].set_callback([]()
+    {
+        // voltage is divided by 2, so multiply back
+        constexpr float voltage_divider = 2.f;
+        float voltage = analogRead(g_battery_pin) * voltage_divider * 3.3f / ADC_MAX;
+        g_battery_val = static_cast<uint8_t>(map_value<float>(voltage, 3.3f, 4.2f, 0.f, 255.f));
+        // Serial.printf("battery: %d%%\n", 100 * g_battery_val / 255);
+    });
+    g_timer[TIMER_BATTERY_MEASURE].set_periodic();
+    g_timer[TIMER_BATTERY_MEASURE].expires_from_now(10.f);
+
     // lora config
-    set_address(69);
+    set_address(13);
 
     g_timer[TIMER_LORA_SEND].set_callback([](){ lora_send_status(); });
     g_timer[TIMER_LORA_SEND].set_periodic();
@@ -262,7 +291,7 @@ void loop()
     g_last_accel_val = max(g_last_accel_val, max(g_factor - 1.f, 0.f));
 
     // poll Timer objects
-    for(uint32_t i = 0; i < g_num_timers; ++i){ g_timer[i].poll(); }
+    for(uint32_t i = 0; i < NUM_TIMERS; ++i){ g_timer[i].poll(); }
 
     // receive
     lora_receive();
@@ -278,14 +307,8 @@ void loop()
 
     if(g_time_accum >= g_update_interval)
     {
-        // // flash red indicator LED
-        // if(g_use_indicator){ digitalWrite(13, g_indicator); }
-        // g_indicator = !g_indicator;
-
         auto color = color_mix(ORANGE, AQUA, clamp(g_last_accel_val / 2.f, 0.f, 1.f));
         g_mode_colour->set_color(color);
-
-        // Serial.println(g_last_accel_val);
 
         for(uint8_t i = 0; i < g_num_paths; ++i)
         {
