@@ -62,6 +62,7 @@ enum RunMode
 };
 uint32_t g_run_mode = MODE_RUNNING;
 
+bool g_leds_enabled = true;
 constexpr uint8_t g_num_paths = 1;
 constexpr uint8_t g_path_lengths[] = {1};
 const uint8_t g_led_pins[] = {5};
@@ -89,6 +90,7 @@ constexpr lis3dh_range_t g_sensor_range = LIS3DH_RANGE_4_G;
 sensors_event_t g_sensor_event;
 const uint16_t g_sense_interval = 2;
 float g_last_accel_val = 0;
+float g_max_accel_val = 0;
 float g_accel_thresh = 1.f;
 
 // median filtering for accelerometer
@@ -131,18 +133,18 @@ void lora_receive()
         // if(len < sizeof(g_lora_buffer)){ g_lora_buffer[len] = 0; }
 
         // if(from == m_node_info.server_address && to == g_lora_config.address)
-        if(len >= sizeof(smart_bulb_t))
+        if(len == sizeof(smart_bulb_t) && g_lora_buffer[0] == STRUCT_TYPE_SMART_BULB)
         {
-            auto rssi = m_rfm95.driver->lastRssi();
-            sprintf(g_serial_buf, "src: %d -- rssi: %d\n", from, rssi);
-            Serial.write(g_serial_buf);
+            // auto rssi = m_rfm95.driver->lastRssi();
+            // sprintf(g_serial_buf, "src: %d -- rssi: %d\n", from, rssi);
+            // Serial.write(g_serial_buf);
+            //
+            // smart_bulb_t data = {};
+            // memcpy(&data, g_lora_buffer, len);
 
-            smart_bulb_t data = {};
-            memcpy(&data, g_lora_buffer, len);
-
-            sprintf(g_serial_buf, "{\n\tlight:%d\n\tacceleration: %d\n\tbattery: %d\n}\n",
-                    data.light_sensor, data.acceleration, data.battery);
-            Serial.write(g_serial_buf);
+            // sprintf(g_serial_buf, "{\n\tlight:%d\n\tacceleration: %d\n\tbattery: %d\n}\n",
+            //         data.light_sensor, data.acceleration, data.battery);
+            // Serial.write(g_serial_buf);
         }
     }
 }
@@ -153,10 +155,12 @@ bool lora_send_status()
     constexpr size_t num_bytes = sizeof(smart_bulb_t);
 
     smart_bulb_t data = {};
+    data.leds_enabled = g_leds_enabled;
     data.battery = g_battery_val;
-    data.acceleration = static_cast<uint8_t>(map_value<float>(g_last_accel_val, 0.f, 4.f, 0, 255));
-    data.light_sensor = static_cast<uint8_t>(map_value<float>(g_photo_val, 0.f, 2 * g_photo_thresh,
+    data.acceleration = static_cast<uint8_t>(map_value<float>(g_max_accel_val, 0.f, 4.f, 0, 255));
+    data.light_sensor = static_cast<uint8_t>(map_value<float>(g_photo_val, 0.f, 10 * g_photo_thresh,
                                                               0, 255));
+    g_max_accel_val = 0;
 
     // send a message to the lora mesh-server
     if(m_rfm95.manager->sendtoWait((uint8_t*)&data, num_bytes, RH_BROADCAST_ADDRESS))
@@ -191,6 +195,7 @@ void enable_leds(bool use_leds)
         }
     }
     digitalWrite(13, use_leds);
+    g_leds_enabled = use_leds;
 }
 
 void setup()
@@ -253,7 +258,9 @@ void setup()
     {
         // voltage is divided by 2, so multiply back
         constexpr float voltage_divider = 2.f;
-        float voltage = analogRead(g_battery_pin) * voltage_divider * 3.3f / ADC_MAX;
+        auto raw_bat_measure = analogRead(g_battery_pin);
+
+        float voltage = 3.3f * (float)raw_bat_measure * voltage_divider / (float)ADC_MAX;
         g_battery_val = static_cast<uint8_t>(map_value<float>(voltage, 3.3f, 4.2f, 0.f, 255.f));
         // Serial.printf("battery: %d%%\n", 100 * g_battery_val / 255);
     });
@@ -289,6 +296,7 @@ void loop()
     constexpr float base_g =  9.82f;
     float g_factor = sqrtf(g_running_median.getMedian()) / base_g;
     g_last_accel_val = max(g_last_accel_val, max(g_factor - 1.f, 0.f));
+    g_max_accel_val = max(g_last_accel_val, g_max_accel_val);
 
     // poll Timer objects
     for(uint32_t i = 0; i < NUM_TIMERS; ++i){ g_timer[i].poll(); }

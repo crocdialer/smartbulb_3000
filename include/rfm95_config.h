@@ -74,12 +74,13 @@ static bool setup(const config_t &the_config, driver_struct_t &out_driver)
     delay(10);
 
     // init the driver layer
-    if(!out_driver.driver->init() || !out_driver.driver->setFrequency(the_config.frequency))
-    {
-        return false;
-    }
+    if(!out_driver.driver->init()){ return false; }
 
-    // set frequency
+    // TODO: has no effect 
+    if(!out_driver.driver->setFrequency(the_config.frequency)){ return false; }
+
+    // set tx-power
+    delay(100);
     out_driver.driver->setTxPower(the_config.tx_power, false);
 
     // init manager
