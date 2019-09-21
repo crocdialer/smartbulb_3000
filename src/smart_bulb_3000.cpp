@@ -133,7 +133,7 @@ void lora_receive()
         // if(len < sizeof(g_lora_buffer)){ g_lora_buffer[len] = 0; }
 
         // if(from == m_node_info.server_address && to == g_lora_config.address)
-        if(len == sizeof(smart_bulb_t) && g_lora_buffer[0] == STRUCT_TYPE_SMART_BULB)
+        if(len >= sizeof(smart_bulb_t) && g_lora_buffer[0] == STRUCT_TYPE_SMART_BULB)
         {
             // auto rssi = m_rfm95.driver->lastRssi();
             // sprintf(g_serial_buf, "src: %d -- rssi: %d\n", from, rssi);

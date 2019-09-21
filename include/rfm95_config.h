@@ -14,10 +14,16 @@
 
 namespace lora{
 
+#if defined(ARDUINO_FEATHER_M0) || defined(ARDUINO_FEATHER_M4)
+#define CS_PIN 6
+#elif defined(ARDUINO_ITSYBITSY_M0) || defined(ARDUINO_ITSYBITSY_M4)
+#define CS_PIN 7
+#endif
+
 struct config_t
 {
     //! chip select pin (<6> on adafruit_feather_m4, <7> on adafruit_itsybitsy_m4)
-    uint8_t pin_cs = 6;
+    uint8_t pin_cs = CS_PIN;
 
     //! interrupt request pin
     uint8_t pin_irq = 10;
@@ -76,12 +82,15 @@ static bool setup(const config_t &the_config, driver_struct_t &out_driver)
     // init the driver layer
     if(!out_driver.driver->init()){ return false; }
 
-    // TODO: has no effect 
+    // TODO: has no effect
     if(!out_driver.driver->setFrequency(the_config.frequency)){ return false; }
 
     // set tx-power
     delay(100);
     out_driver.driver->setTxPower(the_config.tx_power, false);
+
+    // 10ms carrier-sensing before transmit
+    out_driver.driver->setCADTimeout(10000);
 
     // init manager
     out_driver.manager = new RHReliableDatagram(*out_driver.driver, the_config.address);
