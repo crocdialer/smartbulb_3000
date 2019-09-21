@@ -118,7 +118,7 @@ static inline void print_color(uint32_t the_color)
     uint8_t *ptr = (uint8_t*) &the_color;
     sprintf(buf, "R: %d - G: %d - B: %d - W: %d\n", ptr[r_offset], ptr[g_offset],
             ptr[b_offset], ptr[w_offset]);
-    Serial.write(buf);
+    Serial.print(buf);
 }
 
 #define PI 3.1415926535f
@@ -149,3 +149,85 @@ private:
     static constexpr uint32_t m_array_size = 500;
     float m_sin_table[m_array_size];
 };
+
+static uint8_t crc8(const uint8_t *buff, size_t size)
+{
+    uint8_t* p = (uint8_t*)buff;
+    uint8_t result = 0xFF;
+
+    for (result = 0 ; size != 0 ; size--)
+    {
+        result ^= *p++;
+
+        for (size_t i = 0 ; i < 8; i++)
+        {
+            if (result & 0x80)
+            {
+                result <<= 1;
+                result ^= 0x85; // x8 + x7 + x2 + x0
+            }
+            else{ result <<= 1; }
+        }
+    }
+    return result;
+}
+
+static uint16_t crc16(const uint8_t* buff, size_t size)
+{
+    uint8_t* data = (uint8_t*)buff;
+    uint16_t result = 0xFFFF;
+
+    for (size_t i = 0; i < size; ++i)
+    {
+        result ^= data[i];
+        for (size_t j = 0; j < 8; ++j)
+        {
+            if (result & 0x01) result = (result >> 1) ^ 0xA001;
+            else result >>= 1;
+        }
+    }
+    return result;
+}
+
+inline uint32_t mod255(void *data, size_t m)
+{
+    uint32_t sum = 0;
+
+    auto ptr = static_cast<uint8_t*>(data);
+
+    // assert(m>=0);
+    // assert(m<(1<<24));		/* else `sum' might overflow 32 bits */
+
+    /* add up the 8-bit "digits" of `x[]' */
+    for(size_t i = 0; i < m; i++){ sum += ptr[i]; }
+
+    /* add up the 8-bit "digits" of `sum' */
+    while(sum > 255){ sum = (sum & 0xFFU) + (sum >> 8U); }
+
+    return sum;
+}
+
+inline uint32_t mod257(void *data, size_t m)
+{
+    auto ptr = static_cast<uint8_t*>(data);
+    uint32_t sumeven = 0, sumodd = 0;
+
+    // assert(m>=0);
+    // assert(m<(1<<24));		/* else the sums might overflow 32 bits */
+
+    // add up the even 8-bit "digits" of `x[]'
+    for(size_t i = m - 1; i >= 0; i -= 2){ sumeven += ptr[i]; }
+
+    // add up the odd 8-bit "digits" of `x[]'
+    for(size_t i = m - 2; i >= 0; i -= 2){ sumodd += ptr[i]; }
+
+    /* reduce modulo 257 in 32-bit arithmetic */
+    sumeven %= 257;
+    sumodd %= 257;
+
+    /* insure a positive difference */
+    if(sumeven < sumodd){ sumeven += 257; }
+
+    /* always in the range [1,...,257] */
+    return sumeven - sumodd;
+}

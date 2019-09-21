@@ -152,18 +152,24 @@ void lora_receive()
 bool lora_send_status()
 {
     bool ret = false;
-    constexpr size_t num_bytes = sizeof(smart_bulb_t);
+    constexpr size_t num_bytes = sizeof(smart_bulb_t) + 1;
 
-    smart_bulb_t data = {};
-    data.leds_enabled = g_leds_enabled;
-    data.battery = g_battery_val;
-    data.acceleration = static_cast<uint8_t>(map_value<float>(g_max_accel_val, 0.f, 4.f, 0, 255));
-    data.light_sensor = static_cast<uint8_t>(map_value<float>(g_photo_val, 0.f, 10 * g_photo_thresh,
-                                                              0, 255));
+    uint8_t data[num_bytes];
+
+    smart_bulb_t &smart_bulb = *(smart_bulb_t*)data;
+    smart_bulb = {};
+    smart_bulb.leds_enabled = g_leds_enabled;
+    smart_bulb.battery = g_battery_val;
+    smart_bulb.acceleration = static_cast<uint8_t>(map_value<float>(g_max_accel_val, 0.f, 4.f, 0, 255));
+    smart_bulb.light_sensor = static_cast<uint8_t>(map_value<float>(g_photo_val, 0.f, 10 * g_photo_thresh,
+                                                                    0, 255));
     g_max_accel_val = 0;
 
+    // checksum
+    data[num_bytes - 1] = crc8(data, sizeof(smart_bulb_t));
+
     // send a message to the lora mesh-server
-    if(m_rfm95.manager->sendtoWait((uint8_t*)&data, num_bytes, RH_BROADCAST_ADDRESS))
+    if(m_rfm95.manager->sendtoWait(data, num_bytes, RH_BROADCAST_ADDRESS))
     {
         // the message has been reliably delivered to the next node.
         ret = true;
@@ -238,20 +244,20 @@ void setup()
     enable_leds(true);
 
     // brightness measuring
-    g_timer[TIMER_BRIGHTNESS_MEASURE].set_callback([]()
-    {
-        g_photo_val = analogRead(g_photo_pin);
-        bool use_leds = g_photo_val < g_photo_thresh;
-
-        if(use_leds)
-        {
-            enable_leds(true);
-            g_timer[TIMER_LED_OFF].expires_from_now(g_led_timeout);
-        }
-
-    });
-    g_timer[TIMER_BRIGHTNESS_MEASURE].set_periodic();
-    g_timer[TIMER_BRIGHTNESS_MEASURE].expires_from_now(.2f);
+    // g_timer[TIMER_BRIGHTNESS_MEASURE].set_callback([]()
+    // {
+    //     g_photo_val = analogRead(g_photo_pin);
+    //     bool use_leds = g_photo_val < g_photo_thresh;
+    //
+    //     if(use_leds)
+    //     {
+    //         enable_leds(true);
+    //         g_timer[TIMER_LED_OFF].expires_from_now(g_led_timeout);
+    //     }
+    //
+    // });
+    // g_timer[TIMER_BRIGHTNESS_MEASURE].set_periodic();
+    // g_timer[TIMER_BRIGHTNESS_MEASURE].expires_from_now(.2f);
 
     // battery measuring
     g_timer[TIMER_BATTERY_MEASURE].set_callback([]()
