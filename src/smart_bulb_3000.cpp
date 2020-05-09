@@ -80,8 +80,12 @@ constexpr uint8_t g_photo_pin = A5;
 constexpr uint16_t g_photo_thresh = 60;
 uint16_t g_photo_val = 0;
 
-// battery measuring
+// battery
+#if defined(ARDUINO_SAMD_ZERO)
+constexpr uint8_t g_battery_pin = A7;
+#elif defined(ARDUINO_FEATHER_M4)
 constexpr uint8_t g_battery_pin = A6;
+#endif
 uint16_t g_battery_val = 0;
 
 // acceleration measuring
@@ -127,7 +131,7 @@ void lora_receive()
     uint8_t from, to, msg_id, flags;
 
     // check for messages addressed to this node
-    if(m_rfm95.manager->recvfromAck(g_lora_buffer, &len, &from, &to, &msg_id, &flags))
+    if(m_rfm95.manager->recvfrom(g_lora_buffer, &len, &from, &to, &msg_id, &flags))
     {
         // null-terminated
         // if(len < sizeof(g_lora_buffer)){ g_lora_buffer[len] = 0; }
@@ -149,37 +153,28 @@ void lora_receive()
     }
 }
 
-bool lora_send_status()
+template<typename T> bool lora_send_status(const T &data)
 {
-    bool ret = false;
-    constexpr size_t num_bytes = sizeof(smart_bulb_t) + 1;
+    // data + checksum
+    constexpr size_t num_bytes = sizeof(T) + 1;
 
-    uint8_t data[num_bytes];
-
-    smart_bulb_t &smart_bulb = *(smart_bulb_t*)data;
-    smart_bulb = {};
-    smart_bulb.leds_enabled = g_leds_enabled;
-    smart_bulb.battery = g_battery_val;
-    smart_bulb.acceleration = static_cast<uint8_t>(map_value<float>(g_max_accel_val, 0.f, 4.f, 0, 255));
-    smart_bulb.light_sensor = static_cast<uint8_t>(map_value<float>(g_photo_val, 0.f, 10 * g_photo_thresh,
-                                                                    0, 255));
-    g_max_accel_val = 0;
-
-    // checksum
-    data[num_bytes - 1] = crc8(data, sizeof(smart_bulb_t));
-
-    // send a message to the lora mesh-server
-    if(m_rfm95.manager->sendtoWait(data, num_bytes, RH_BROADCAST_ADDRESS))
+    struct checksum_helper_t
     {
-        // the message has been reliably delivered to the next node.
-        ret = true;
-    }
-    else
-    {
-        // failed to send to next hop
-        Serial.println("lora: could not find a route to destination ...");
-    }
-    return ret;
+        uint8_t from, to;
+        T data;
+        uint8_t checksum;
+    };
+    checksum_helper_t foo;
+
+    foo.from = g_lora_config.address;
+    foo.to = RH_BROADCAST_ADDRESS;
+    foo.data = data;
+
+    // checksum TODO: include address
+    foo.checksum = crc8((uint8_t*)&foo.data, sizeof(T));
+
+    // send a broadcast-message
+    return m_rfm95.manager->sendto((uint8_t*)&foo.data, num_bytes, RH_BROADCAST_ADDRESS);
 }
 
 void blink()
@@ -243,7 +238,7 @@ void setup()
     // start with leds turned on
     enable_leds(true);
 
-    // brightness measuring
+    // // brightness measuring
     // g_timer[TIMER_BRIGHTNESS_MEASURE].set_callback([]()
     // {
     //     g_photo_val = analogRead(g_photo_pin);
@@ -267,16 +262,27 @@ void setup()
         auto raw_bat_measure = analogRead(g_battery_pin);
 
         float voltage = 3.3f * (float)raw_bat_measure * voltage_divider / (float)ADC_MAX;
-        g_battery_val = static_cast<uint8_t>(map_value<float>(voltage, 3.3f, 4.2f, 0.f, 255.f));
-        // Serial.printf("battery: %d%%\n", 100 * g_battery_val / 255);
+        g_battery_val = static_cast<uint8_t>(map_value<float>(voltage, 3.6f, 4.2f, 0.f, 255.f));
+        Serial.printf("battery: %d%%\n", 100 * g_battery_val / 255);
     });
     g_timer[TIMER_BATTERY_MEASURE].set_periodic();
     g_timer[TIMER_BATTERY_MEASURE].expires_from_now(10.f);
 
     // lora config
-    set_address(13);
+    set_address(69);
 
-    g_timer[TIMER_LORA_SEND].set_callback([](){ lora_send_status(); });
+    g_timer[TIMER_LORA_SEND].set_callback([]()
+    {
+        smart_bulb_t smart_bulb = {};
+        smart_bulb.leds_enabled = g_leds_enabled;
+        smart_bulb.battery = g_battery_val;
+        smart_bulb.acceleration = static_cast<uint8_t>(map_value<float>(g_max_accel_val, 0.f, 4.f, 0, 255));
+        smart_bulb.light_sensor = static_cast<uint8_t>(map_value<float>(g_photo_val, 0.f, 10 * g_photo_thresh,
+                                                                        0, 255));
+        g_max_accel_val = 0;
+
+        lora_send_status(smart_bulb);
+    });
     g_timer[TIMER_LORA_SEND].set_periodic();
     g_timer[TIMER_LORA_SEND].expires_from_now(g_lora_send_interval);
 }

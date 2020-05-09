@@ -14,7 +14,7 @@
 
 namespace lora{
 
-#if defined(ARDUINO_FEATHER_M0) || defined(ARDUINO_FEATHER_M4)
+#if defined(ARDUINO_SAMD_ZERO) || defined(ARDUINO_FEATHER_M4)
 #define CS_PIN 6
 #elif defined(ARDUINO_ITSYBITSY_M0) || defined(ARDUINO_ITSYBITSY_M4)
 #define CS_PIN 7
@@ -39,6 +39,9 @@ struct config_t
     uint8_t tx_power = 15;
 
     uint8_t address = 0;
+
+    // carrier-access detection
+    uint32_t cad_timeout = 10000;
 };
 
 enum NodeStructType
@@ -57,7 +60,7 @@ enum NodeStructType
 struct driver_struct_t
 {
     RH_RF95 *driver = nullptr;
-    RHReliableDatagram *manager = nullptr;
+    RHDatagram *manager = nullptr;
 };
 
 static bool setup(const config_t &the_config, driver_struct_t &out_driver)
@@ -90,7 +93,7 @@ static bool setup(const config_t &the_config, driver_struct_t &out_driver)
     out_driver.driver->setTxPower(the_config.tx_power, false);
 
     // 10ms carrier-sensing before transmit
-    out_driver.driver->setCADTimeout(10000);
+    out_driver.driver->setCADTimeout(the_config.cad_timeout);
 
     // init manager
     out_driver.manager = new RHReliableDatagram(*out_driver.driver, the_config.address);
