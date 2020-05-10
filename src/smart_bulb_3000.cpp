@@ -18,6 +18,8 @@
 // serialization
 #include "NodeTypes.h"
 
+const uint8_t g_lora_address = 99;
+
 // update rate in Hz
 #define UPDATE_RATE 30
 #define SERIAL_BUFSIZE 128
@@ -54,6 +56,9 @@ bool g_indicator = false;
 
 bool g_use_indicator = false;
 
+// there's a button
+constexpr uint8_t g_button_pin = A2;
+
 //! define our run-modes here
 enum RunMode
 {
@@ -76,8 +81,11 @@ CompositeMode *g_mode_composite = nullptr;
 float g_led_timeout = 30.f;
 
 // brightness measuring
-constexpr uint8_t g_photo_pin = A5;
-constexpr uint16_t g_photo_thresh = 60;
+constexpr uint8_t g_photo_pin = A3;
+
+constexpr uint16_t g_photo_min = 160;
+constexpr uint16_t g_photo_max = ADC_MAX;
+constexpr uint16_t g_photo_thresh = 250;
 uint16_t g_photo_val = 0;
 
 // battery
@@ -112,6 +120,9 @@ uint8_t g_lora_buffer[RH_RF95_MAX_MESSAGE_LEN];
 
 float g_lora_send_interval = 1.f;
 
+// function declarations
+void blink_status_led();
+
 void set_address(uint8_t address)
 {
     g_lora_config.address = address;
@@ -122,7 +133,11 @@ void set_address(uint8_t address)
         Serial.print("LoRa radio init complete -> now listening on adress: 0x");
         Serial.println(g_lora_config.address, HEX);
     }
-    else{ Serial.println("LoRa radio init failed"); }
+    else
+    {
+       Serial.println("LoRa radio init failed");
+       while(true){ blink_status_led(); }
+    }
 }
 
 void lora_receive()
@@ -177,12 +192,12 @@ template<typename T> bool lora_send_status(const T &data)
     return m_rfm95.manager->sendto((uint8_t*)&foo.data, num_bytes, RH_BROADCAST_ADDRESS);
 }
 
-void blink()
+void blink_status_led()
 {
-    digitalWrite(13, true);
-    delay(666);
-    digitalWrite(13, false);
-    delay(666);
+    digitalWrite(13, LOW);
+    delay(500);
+    digitalWrite(13, HIGH);
+    delay(500);
 }
 
 void enable_leds(bool use_leds)
@@ -201,21 +216,27 @@ void enable_leds(bool use_leds)
 
 void setup()
 {
-    // while(!Serial){ delay(10); }
-    Serial.begin(115200);
-
-    srand(analogRead(A0));
+    analogReadResolution(ADC_BITS);
 
     // button
     pinMode(13, OUTPUT);
-    pinMode(12, INPUT_PULLUP);
+    pinMode(g_button_pin, INPUT_PULLUP);
+
+    // while(!Serial){ blink_status_led(); }
+    Serial.begin(115200);
+
+    srand(analogRead(A0));
 
     // enable photo sense pin
     pinMode(g_photo_pin, INPUT);
 
     //setup accelerometer
     g_accel = Adafruit_LIS3DH();
-    if(!g_accel.begin()){ Serial.print("could not connect accelerometer ..."); }
+    if(!g_accel.begin())
+    {
+       Serial.print("could not connect accelerometer ...");
+       while(true){ blink_status_led(); }
+    }
     g_accel.setRange(g_sensor_range);
 
     // init path objects with pin array
@@ -238,21 +259,22 @@ void setup()
     // start with leds turned on
     enable_leds(true);
 
-    // // brightness measuring
-    // g_timer[TIMER_BRIGHTNESS_MEASURE].set_callback([]()
-    // {
-    //     g_photo_val = analogRead(g_photo_pin);
-    //     bool use_leds = g_photo_val < g_photo_thresh;
-    //
-    //     if(use_leds)
-    //     {
-    //         enable_leds(true);
-    //         g_timer[TIMER_LED_OFF].expires_from_now(g_led_timeout);
-    //     }
-    //
-    // });
-    // g_timer[TIMER_BRIGHTNESS_MEASURE].set_periodic();
-    // g_timer[TIMER_BRIGHTNESS_MEASURE].expires_from_now(.2f);
+    // brightness measuring
+    g_timer[TIMER_BRIGHTNESS_MEASURE].set_callback([]()
+    {
+        g_photo_val = analogRead(g_photo_pin);
+        Serial.printf("g_photo_val: %d\n", g_photo_val);
+        // bool use_leds = g_photo_val < g_photo_thresh;
+
+        // if(use_leds)
+        // {
+        //     enable_leds(true);
+        //     g_timer[TIMER_LED_OFF].expires_from_now(g_led_timeout);
+        // }
+
+    });
+    g_timer[TIMER_BRIGHTNESS_MEASURE].set_periodic();
+    g_timer[TIMER_BRIGHTNESS_MEASURE].expires_from_now(.2f);
 
     // battery measuring
     g_timer[TIMER_BATTERY_MEASURE].set_callback([]()
@@ -269,7 +291,7 @@ void setup()
     g_timer[TIMER_BATTERY_MEASURE].expires_from_now(10.f);
 
     // lora config
-    set_address(69);
+    set_address(g_lora_address);
 
     g_timer[TIMER_LORA_SEND].set_callback([]()
     {
@@ -277,8 +299,7 @@ void setup()
         smart_bulb.leds_enabled = g_leds_enabled;
         smart_bulb.battery = g_battery_val;
         smart_bulb.acceleration = static_cast<uint8_t>(map_value<float>(g_max_accel_val, 0.f, 4.f, 0, 255));
-        smart_bulb.light_sensor = static_cast<uint8_t>(map_value<float>(g_photo_val, 0.f, 10 * g_photo_thresh,
-                                                                        0, 255));
+        smart_bulb.light_sensor = static_cast<uint8_t>(map_value<float>(g_photo_val, g_photo_min, g_photo_max, 0, 255));
         g_max_accel_val = 0;
 
         lora_send_status(smart_bulb);
@@ -317,7 +338,7 @@ void loop()
     lora_receive();
 
     // button
-    bool button_pressed = !digitalRead(12);
+    bool button_pressed = !digitalRead(g_button_pin);
 
     if(button_pressed || (g_last_accel_val > g_accel_thresh))
     {
