@@ -18,7 +18,10 @@
 // serialization
 #include "NodeTypes.h"
 
-const uint8_t g_lora_address = 99;
+// state
+#include "smart_bulb_state.h"
+
+const uint8_t g_lora_address = 69;
 
 // update rate in Hz
 #define UPDATE_RATE 30
@@ -58,6 +61,7 @@ bool g_use_indicator = false;
 
 // there's a button
 constexpr uint8_t g_button_pin = A2;
+volatile bool g_button_pressed = false;
 
 //! define our run-modes here
 enum RunMode
@@ -69,8 +73,8 @@ uint32_t g_run_mode = MODE_RUNNING;
 
 bool g_leds_enabled = true;
 constexpr uint8_t g_num_paths = 1;
-constexpr uint8_t g_path_lengths[] = {1};
-const uint8_t g_led_pins[] = {5};
+constexpr uint8_t g_path_lengths[g_num_paths] = {1};
+const uint8_t g_led_pins[g_num_paths] = {5};
 
 LED_Path* g_path[g_num_paths];
 ModeHelper *g_mode_sinus = nullptr, *g_mode_current = nullptr;
@@ -78,7 +82,7 @@ Mode_ONE_COLOR *g_mode_colour = nullptr;
 CompositeMode *g_mode_composite = nullptr;
 
 // timeout before leds turn off
-float g_led_timeout = 30.f;
+float g_led_timeout = 3600.f;// 1h
 
 // brightness measuring
 constexpr uint8_t g_photo_pin = A3;
@@ -118,7 +122,10 @@ lora::driver_struct_t m_rfm95 = {};
 //! lora message buffer
 uint8_t g_lora_buffer[RH_RF95_MAX_MESSAGE_LEN];
 
-float g_lora_send_interval = 1.f;
+float g_lora_send_interval = 5.f;
+
+// a simple state machine
+State g_current_state = State::DAY_OFF;
 
 // function declarations
 void blink_status_led();
@@ -192,6 +199,17 @@ void blink_status_led()
     delay(500);
 }
 
+void button_interrupt()
+{
+    static uint32_t last_time_stamp = 0;
+
+    if(millis() - last_time_stamp > 200)
+    {
+        g_button_pressed = g_button_pressed || !digitalRead(g_button_pin);
+        last_time_stamp = millis();
+    }
+}
+
 void enable_leds(bool use_leds)
 {
     for(uint8_t i = 0; i < g_num_paths; ++i)
@@ -213,6 +231,7 @@ void setup()
     // button
     pinMode(13, OUTPUT);
     pinMode(g_button_pin, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(g_button_pin), button_interrupt, FALLING);
 
     // while(!Serial){ blink_status_led(); }
     Serial.begin(115200);
@@ -222,7 +241,7 @@ void setup()
     // enable photo sense pin
     pinMode(g_photo_pin, INPUT);
 
-    //setup accelerometer
+    // setup accelerometer
     g_accel = Adafruit_LIS3DH();
     if(!g_accel.begin())
     {
@@ -245,25 +264,23 @@ void setup()
     g_mode_composite->add_mode(g_mode_sinus);
 
     // timer callback to reset the runmode after streaming
-    g_timer[TIMER_LED_OFF].set_callback([](){ enable_leds(false); });
+    g_timer[TIMER_LED_OFF].set_callback([]()
+    {
+         g_current_state = next_state(g_current_state, Event::TIMER);
+    });
     g_timer[TIMER_LED_OFF].expires_from_now(g_led_timeout);
 
-    // start with leds turned on
-    enable_leds(true);
+    // start with current state
+    apply_state(g_current_state);
 
     // brightness measuring
     g_timer[TIMER_BRIGHTNESS_MEASURE].set_callback([]()
     {
         g_photo_val = analogRead(g_photo_pin);
-        Serial.printf("g_photo_val: %d\n", g_photo_val);
-        // bool use_leds = g_photo_val < g_photo_thresh;
 
-        // if(use_leds)
-        // {
-        //     enable_leds(true);
-        //     g_timer[TIMER_LED_OFF].expires_from_now(g_led_timeout);
-        // }
-
+        // light sensor
+        auto photo_event = g_photo_val > g_photo_thresh ? Event::SENSOR_HIGH : Event::SENSOR_LOW;
+        g_current_state = next_state(g_current_state, photo_event);
     });
     g_timer[TIMER_BRIGHTNESS_MEASURE].set_periodic();
     g_timer[TIMER_BRIGHTNESS_MEASURE].expires_from_now(.2f);
@@ -288,7 +305,7 @@ void setup()
     g_timer[TIMER_LORA_SEND].set_callback([]()
     {
         smart_bulb_t smart_bulb = {};
-        smart_bulb.leds_enabled = g_leds_enabled;
+        smart_bulb.leds_enabled = static_cast<uint8_t>(g_current_state);
         smart_bulb.battery = g_battery_val;
         smart_bulb.acceleration = static_cast<uint8_t>(map_value<float>(g_max_accel_val, 0.f, 4.f, 0, 255));
         smart_bulb.light_sensor = static_cast<uint8_t>(map_value<float>(g_photo_val, g_photo_min, g_photo_max, 0, 255));
@@ -328,14 +345,17 @@ void loop()
 
     // receive
     lora_receive();
-
-    // button
-    bool button_pressed = !digitalRead(g_button_pin);
-
-    if(button_pressed || (g_last_accel_val > g_accel_thresh))
+    
+    if(g_button_pressed)
     {
-        if(g_timer[TIMER_LED_OFF].has_expired()){ enable_leds(true); }
-        g_timer[TIMER_LED_OFF].expires_from_now(g_led_timeout);
+        g_button_pressed = false;
+        g_current_state = next_state(g_current_state, Event::BUTTON);
+    }
+
+    // check for "shake" event
+    if(g_last_accel_val > g_accel_thresh)
+    {
+        g_current_state = next_state(g_current_state, Event::SHAKE);
     }
 
     if(g_time_accum >= g_update_interval)
@@ -356,4 +376,68 @@ void loop()
         g_time_accum = 0;
     }
     yield();
+}
+
+void apply_state(State current_state)
+{
+    switch (current_state)
+    {
+
+    case State::DAY_ON:
+        enable_leds(true);
+        break;
+
+    case State::DAY_OFF:
+        enable_leds(false);
+        break;
+
+    case State::NIGHT_ON:
+
+        // enable leds, start timer
+        enable_leds(true);
+        g_timer[TIMER_LED_OFF].expires_from_now(g_led_timeout);
+        break;
+
+    case State::NIGHT_OFF:
+        enable_leds(false);
+        break;
+
+    default:
+        break;
+    }
+}
+
+State next_state(State current_state, Event event)
+{
+    State state = current_state;
+
+    switch (current_state)
+    {
+    case State::DAY_OFF:
+    if(event == Event::BUTTON || event == Event::SHAKE){ state = State::DAY_ON; }
+    else if(event == Event::SENSOR_LOW){ state = State::NIGHT_ON; }
+        break;
+    
+    case State::DAY_ON:
+    if(event == Event::BUTTON){ state = State::DAY_OFF; }
+    else if(event == Event::SENSOR_LOW){ state = State::NIGHT_ON; }
+        break;
+
+    case State::NIGHT_OFF:
+    if(event == Event::BUTTON || event == Event::SHAKE){ state = State::NIGHT_ON; }
+    else if(event == Event::SENSOR_HIGH){ state = State::DAY_OFF; }
+        break;
+
+    case State::NIGHT_ON:
+    if(event == Event::BUTTON || event == Event::TIMER){ state = State::NIGHT_OFF; }
+    else if(event == Event::SENSOR_HIGH){ state = State::DAY_OFF; }
+        break;
+
+    default:
+        break;
+    }
+
+    // apply changes if necessary
+    if(state != current_state){ apply_state(state); }
+    return state;
 }

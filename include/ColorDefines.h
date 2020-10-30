@@ -2,7 +2,8 @@
 
 #include <Adafruit_NeoPixel.h>
 
-#define COLOR_RGBW
+// #define COLOR_RGBW
+#define COLOR_BRG
 
 static const uint32_t
 #if defined(COLOR_RGBW)
