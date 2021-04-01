@@ -21,7 +21,7 @@
 // state
 #include "smart_bulb_state.h"
 
-const uint8_t g_lora_address = 69;
+const uint8_t g_lora_address = 99;
 
 // update rate in Hz
 #define UPDATE_RATE 30
@@ -47,6 +47,8 @@ enum TimerEnum
     TIMER_BRIGHTNESS_MEASURE,
     TIMER_BATTERY_MEASURE,
     TIMER_LORA_SEND,
+    TIMER_STATE_DEBOUNCE,
+    TIMER_BRIGHTNESS_DEBOUNCE,
     NUM_TIMERS
 };
 
@@ -351,9 +353,8 @@ void loop()
         g_button_pressed = false;
         g_current_state = next_state(g_current_state, Event::BUTTON);
     }
-
     // check for "shake" event
-    if(g_last_accel_val > g_accel_thresh)
+    else if(g_last_accel_val > g_accel_thresh)
     {
         g_current_state = next_state(g_current_state, Event::SHAKE);
     }
@@ -410,34 +411,57 @@ void apply_state(State current_state)
 State next_state(State current_state, Event event)
 {
     State state = current_state;
-
-    switch (current_state)
-    {
-    case State::DAY_OFF:
-    if(event == Event::BUTTON || event == Event::SHAKE){ state = State::DAY_ON; }
-    else if(event == Event::SENSOR_LOW){ state = State::NIGHT_ON; }
-        break;
     
-    case State::DAY_ON:
-    if(event == Event::BUTTON){ state = State::DAY_OFF; }
-    else if(event == Event::SENSOR_LOW){ state = State::NIGHT_ON; }
-        break;
+    if(!g_timer[TIMER_STATE_DEBOUNCE].has_expired()){}
 
-    case State::NIGHT_OFF:
-    if(event == Event::BUTTON || event == Event::SHAKE){ state = State::NIGHT_ON; }
-    else if(event == Event::SENSOR_HIGH){ state = State::DAY_OFF; }
-        break;
+    // luma debounce
+    bool debounceLuma = !g_timer[TIMER_BRIGHTNESS_DEBOUNCE].has_expired();
 
-    case State::NIGHT_ON:
-    if(event == Event::BUTTON || event == Event::TIMER){ state = State::NIGHT_OFF; }
-    else if(event == Event::SENSOR_HIGH){ state = State::DAY_OFF; }
-        break;
+    // general state debounce
+    if(g_timer[TIMER_STATE_DEBOUNCE].has_expired())
+    {
+        switch (current_state)
+        {
+        case State::DAY_OFF:
+        if(event == Event::BUTTON || event == Event::SHAKE){ state = State::DAY_ON; }
+        else if(!debounceLuma && event == Event::SENSOR_LOW){ state = State::NIGHT_ON; }
+            break;
+        
+        case State::DAY_ON:
+        if(event == Event::BUTTON){ state = State::DAY_OFF; }
+        else if(!debounceLuma && event == Event::SENSOR_LOW){ state = State::NIGHT_ON; }
+            break;
 
-    default:
-        break;
+        case State::NIGHT_OFF:
+        if(event == Event::BUTTON || event == Event::SHAKE){ state = State::NIGHT_ON; }
+        else if(!debounceLuma && event == Event::SENSOR_HIGH){ state = State::DAY_OFF; }
+            break;
+
+        case State::NIGHT_ON:
+        if(event == Event::BUTTON || event == Event::TIMER){ state = State::NIGHT_OFF; }
+        else if(!debounceLuma && event == Event::SENSOR_HIGH){ state = State::DAY_OFF; }
+            break;
+
+        default:
+            break;
+        }
+
+        // set debounce timer in s
+        constexpr float debounce_timeout = .15f;
+        g_timer[TIMER_STATE_DEBOUNCE].expires_from_now(debounce_timeout);
     }
 
     // apply changes if necessary
-    if(state != current_state){ apply_state(state); }
+    if(state != current_state)
+    {
+        apply_state(state);
+
+        if(event == Event::SENSOR_LOW || event == Event::SENSOR_HIGH)
+        {
+            // set debounce timer in s
+            constexpr float luma_timeout = 60.f;
+            g_timer[TIMER_BRIGHTNESS_DEBOUNCE].expires_from_now(luma_timeout);
+        }
+    }
     return state;
 }

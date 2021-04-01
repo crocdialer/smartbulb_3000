@@ -153,7 +153,7 @@ finished:
     // advance sinus offsets
     for(uint32_t i = 0; i < 2; ++i)
     {
-        m_sinus_offsets[i] += m_sinus_speeds[i] * the_delta_time / 1000.f;
+        m_sinus_offsets[i] += m_sinus_speeds[i] * (the_delta_time / 1000.f);
     }
 }
 

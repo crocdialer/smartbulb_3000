@@ -141,12 +141,13 @@ public:
 
     inline float operator()(float the_val)
     {
-        int index = (int)(fmodf(the_val, PI_2) / (PI_2) * m_array_size);
+        int index = (int)(fmodf(the_val, PI_2) * m_omega);
         index += index < 0 ? m_array_size : 0;
         return m_sin_table[index];
     }
 private:
     static constexpr uint32_t m_array_size = 500;
+    static constexpr float m_omega = 1.f / (PI_2) * m_array_size;
     float m_sin_table[m_array_size];
 };
 
