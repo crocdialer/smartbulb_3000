@@ -15,7 +15,7 @@ using LedType = Adafruit_NeoPixel;
 #define CURRENT_LED_TYPE (NEO_RGBW + NEO_KHZ800)
 #define BYTES_PER_PIXEL 4
 
-#define TUBE_LENGTH 50
+#define TUBE_LENGTH 150
 #define SEGMENT_LENGTH TUBE_LENGTH // (2 tubes, each 58 px)
 
 class Segment

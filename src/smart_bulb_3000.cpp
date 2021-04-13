@@ -21,7 +21,7 @@
 // state
 #include "smart_bulb_state.h"
 
-const uint8_t g_lora_address = 99;
+const uint8_t g_lora_address = 69;
 
 // update rate in Hz
 #define UPDATE_RATE 30
@@ -84,7 +84,7 @@ Mode_ONE_COLOR *g_mode_colour = nullptr;
 CompositeMode *g_mode_composite = nullptr;
 
 // timeout before leds turn off
-float g_led_timeout = 6 * 3600.f;// 6h
+float g_led_timeout = 4 * 3600.f;// 4h
 
 // brightness measuring
 constexpr uint8_t g_photo_pin = A3;
