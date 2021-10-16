@@ -21,7 +21,7 @@
 // state
 #include "smart_bulb_state.h"
 
-const uint8_t g_lora_address = 69;
+const uint8_t g_lora_address = 99;
 
 // update rate in Hz
 #define UPDATE_RATE 30
@@ -359,6 +359,9 @@ void loop()
     if(g_time_accum >= g_update_interval)
     {
         enable_leds(g_leds_enabled);
+
+        // TODO: random palette
+        // if(rand() / (float)RAND_MAX > 0.5f){}
 
         auto color = color_mix(ORANGE, AQUA, clamp(g_last_accel_val / 2.f, 0.f, 1.f));
         g_mode_colour->set_color(color);
